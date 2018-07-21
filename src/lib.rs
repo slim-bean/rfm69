@@ -52,6 +52,21 @@ const FSTEP: f32 = FXOSC / 524288.0;
 pub struct Regular;
 pub struct HighPower;
 
+#[derive(Debug)]
+pub enum Rfm69Error<E> {
+    UnderlyingLibError(E),
+    PacketNotReady,
+    WaitForModeTimeout,
+    WaitForPacketSendTimeout,
+
+}
+
+impl<E> From<E> for Rfm69Error<E> {
+    fn from(error: E) -> Self {
+        Rfm69Error::UnderlyingLibError(error)
+    }
+}
+
 pub struct RFM69<SPI, NCS, T, PA> {
     spi: SPI,
     ncs: NCS,
@@ -61,7 +76,7 @@ pub struct RFM69<SPI, NCS, T, PA> {
     _pa: PhantomData<PA>,
 }
 
-fn new<SPI, NCS, T, PA, E>(spi: SPI, ncs: NCS, timer: T) -> Result<RFM69<SPI, NCS, T, PA>, E>
+fn new<SPI, NCS, T, PA, E>(spi: SPI, ncs: NCS, timer: T) -> Result<RFM69<SPI, NCS, T, PA>, Rfm69Error<E>>
 where
     SPI: spi::Write<u8, Error = E> + spi::Transfer<u8, Error = E>,
     NCS: OutputPin,
@@ -114,7 +129,7 @@ where
     T: Timer,
     PA: Any,
 {
-    pub fn op_mode(&mut self, mode: OpMode) -> Result<(), E> {
+    pub fn op_mode(&mut self, mode: OpMode) -> Result<(), Rfm69Error<E>> {
         self.modify(Register::OPMODE, |r| (r & !0b11100) | ((mode as u8) << 2))?;
         match mode {
             OpMode::Transmitter => self.high_power_regs(true)?,
@@ -124,14 +139,14 @@ where
         Ok(())
     }
 
-    pub fn mod_settings(&mut self, settings: ModulationSettings) -> Result<(), E> {
+    pub fn mod_settings(&mut self, settings: ModulationSettings) -> Result<(), Rfm69Error<E>> {
         self.write(
             Register::DATAMODUL,
             (settings.mode as u8) << 5 | (settings.ty as u8) << 3 | (settings.shaping as u8),
         )
     }
 
-    pub fn bitrate(&mut self, rate: f32) -> Result<(), E> {
+    pub fn bitrate(&mut self, rate: f32) -> Result<(), Rfm69Error<E>> {
         self.op_mode(OpMode::Standby)?;
         let r = (FXOSC / rate) as u16;
         self.write(Register::BITRATE_MSB, (r >> 8) as u8)?;
@@ -139,7 +154,7 @@ where
         Ok(())
     }
 
-    pub fn fdev(&mut self, fdev: f32) -> Result<(), E> {
+    pub fn fdev(&mut self, fdev: f32) -> Result<(), Rfm69Error<E>> {
         self.op_mode(OpMode::Standby)?;
         let r = (fdev / FSTEP) as u16;
         self.write(Register::FDEV_MSB, (r >> 8) as u8)?;
@@ -147,7 +162,7 @@ where
         Ok(())
     }
 
-    pub fn freq(&mut self, freq: f32) -> Result<(), E> {
+    pub fn freq(&mut self, freq: f32) -> Result<(), Rfm69Error<E>> {
         self.op_mode(OpMode::Standby)?;
         let r = (freq / FSTEP) as u32;
         self.write(Register::FRF_MSB, ((r >> 16) & 0xFF) as u8)?;
@@ -156,13 +171,13 @@ where
         Ok(())
     }
 
-    pub fn preamble(&mut self, len: u16) -> Result<(), E> {
+    pub fn preamble(&mut self, len: u16) -> Result<(), Rfm69Error<E>> {
         self.write(Register::PREAMBLE_MSB, (len >> 8) as u8)?;
         self.write(Register::PREAMBLE_LSB, (len & 0xFF) as u8)?;
         Ok(())
     }
 
-    pub fn sync(&mut self, sync: &[u8]) -> Result<(), E> {
+    pub fn sync(&mut self, sync: &[u8]) -> Result<(), Rfm69Error<E>> {
         if sync.len() == 0 {
             self.write(Register::SYNCCONFIG, 0)?;
         } else {
@@ -178,7 +193,7 @@ where
         Ok(())
     }
 
-    pub fn packet_length(&mut self, len: PacketLength) -> Result<(), E> {
+    pub fn packet_length(&mut self, len: PacketLength) -> Result<(), Rfm69Error<E>> {
         match len {
             PacketLength::Fixed(len) => {
                 self.modify(Register::PACKETCONFIG1, |r| r & !0b10000000)?;
@@ -191,7 +206,7 @@ where
         Ok(())
     }
 
-    pub fn packet_settings(&mut self, settings: PacketSettings) -> Result<(), E> {
+    pub fn packet_settings(&mut self, settings: PacketSettings) -> Result<(), Rfm69Error<E>> {
         self.write(
             Register::PACKETCONFIG1,
             (settings.encoding as u8) << 5 | (settings.crc as u8) << 4
@@ -199,28 +214,28 @@ where
         )
     }
 
-    pub fn node_address(&mut self, a: u8) -> Result<(), E> {
+    pub fn node_address(&mut self, a: u8) -> Result<(), Rfm69Error<E>> {
         self.write(Register::NODEADRS, a)
     }
 
-    pub fn broadcast_address(&mut self, a: u8) -> Result<(), E> {
+    pub fn broadcast_address(&mut self, a: u8) -> Result<(), Rfm69Error<E>> {
         self.write(Register::BROADCASTADRS, a)
     }
 
-    pub fn fifo_mode(&mut self, mode: FifoMode) -> Result<(), E> {
+    pub fn fifo_mode(&mut self, mode: FifoMode) -> Result<(), Rfm69Error<E>> {
         match mode {
             FifoMode::NotEmpty => self.write(Register::FIFOTHRESH, 0b10000000),
             FifoMode::Threshold(thresh) => self.write(Register::FIFOTHRESH, thresh & 0b1111),
         }
     }
 
-    pub fn aes_on(&mut self, key: &[u8; 16]) -> Result<(), E>{
+    pub fn aes_on(&mut self, key: &[u8; 16]) -> Result<(), Rfm69Error<E>>{
         self.write_many(Register::AESKEY1, key)?;
         self.modify(Register::PACKETCONFIG2, |r | r | 0b00000001 );
         Ok(())
     }
 
-    pub fn aes_off(&mut self) -> Result<(), E>{
+    pub fn aes_off(&mut self) -> Result<(), Rfm69Error<E>>{
         self.modify(Register::PACKETCONFIG2, |r | r & 0b11111110 );
         Ok(())
     }
@@ -229,7 +244,7 @@ where
         self.rssi
     }
 
-    pub fn receive(&mut self, buf: &mut [u8]) -> Result<(u8), E> {
+    pub fn receive(&mut self, buf: &mut [u8]) -> Result<(u8), Rfm69Error<E>> {
 
         self.op_mode(OpMode::Reciever)?;
         self.wait_for_mode()?;
@@ -250,7 +265,9 @@ where
         Ok(length)
     }
 
-    pub fn send(&mut self, buf: &[u8]) -> Result<(), E> {
+
+
+    pub fn send(&mut self, buf: &[u8]) -> Result<(), Rfm69Error<E>> {
         // TODO: Check buf length
         self.op_mode(OpMode::Standby)?;
         self.wait_for_mode()?;
@@ -266,37 +283,37 @@ where
         Ok(())
     }
 
-    fn clear_fifo(&mut self) -> Result<(), E> {
+    fn clear_fifo(&mut self) -> Result<(), Rfm69Error<E>> {
         self.write(Register::IRQFLAGS2, 0x10)
     }
 
-    fn is_packet_ready(&mut self) -> Result<bool, E> {
+    fn is_packet_ready(&mut self) -> Result<bool, Rfm69Error<E>> {
         Ok(self.read(Register::IRQFLAGS2)? & 0b00000100 != 0)
     }
 
-    fn wait_for_mode(&mut self) -> Result<(), E> {
+    fn wait_for_mode(&mut self) -> Result<(), Rfm69Error<E>> {
         let start = self.timer.now();
         while self.read(Register::IRQFLAGS1)? & 0b10000000 == 0 {
             if self.timer.since(&start) > TIMEOUT_MODE_READY {
-                panic!("Timeout"); // TODO: Turn this into an Error
+                return Err(Rfm69Error::WaitForModeTimeout);
             }
         }
 
         Ok(())
     }
 
-    fn wait_for_packet_sent(&mut self) -> Result<(), E> {
+    fn wait_for_packet_sent(&mut self) -> Result<(), Rfm69Error<E>> {
         let start = self.timer.now();
         while self.read(Register::IRQFLAGS2)? & 0b00001000 == 0 {
             if self.timer.since(&start) > TIMEOUT_TX {
-                panic!("Timeout"); // TODO: Turn this into an Error
+                return Err(Rfm69Error::WaitForPacketSendTimeout);
             }
         }
 
         Ok(())
     }
 
-    fn high_power_regs(&mut self, on: bool) -> Result<(), E> {
+    fn high_power_regs(&mut self, on: bool) -> Result<(), Rfm69Error<E>> {
         if TypeId::of::<PA>() == TypeId::of::<HighPower>() {
             self.write(Register::TESTPA1, if on { 0x5D } else { 0x55 })?;
             self.write(Register::TESTPA2, if on { 0x7C } else { 0x70 })?;
@@ -304,7 +321,7 @@ where
         Ok(())
     }
 
-    fn modify<F>(&mut self, reg: Register, f: F) -> Result<(), E>
+    fn modify<F>(&mut self, reg: Register, f: F) -> Result<(), Rfm69Error<E>>
     where
         F: FnOnce(u8) -> u8,
     {
@@ -313,13 +330,13 @@ where
         Ok(())
     }
 
-    fn read(&mut self, reg: Register) -> Result<u8, E> {
+    fn read(&mut self, reg: Register) -> Result<u8, Rfm69Error<E>> {
         let mut buf = [0u8; 1];
         self.read_many(reg, &mut buf)?;
         Ok(buf[0])
     }
 
-    fn read_many(&mut self, reg: Register, data: &mut [u8]) -> Result<(), E> {
+    fn read_many(&mut self, reg: Register, data: &mut [u8]) -> Result<(), Rfm69Error<E>> {
         self.ncs.set_low();
         self.spi.transfer(&mut [reg.read_address()])?;
         self.spi.transfer(data)?;
@@ -327,11 +344,11 @@ where
         Ok(())
     }
 
-    fn write(&mut self, reg: Register, val: u8) -> Result<(), E> {
+    fn write(&mut self, reg: Register, val: u8) -> Result<(), Rfm69Error<E>> {
         self.write_many(reg, &[val])
     }
 
-    fn write_many(&mut self, reg: Register, buf: &[u8]) -> Result<(), E> {
+    fn write_many(&mut self, reg: Register, buf: &[u8]) -> Result<(), Rfm69Error<E>> {
         self.ncs.set_low();
         self.spi.write(&[reg.write_address()])?;
         self.spi.write(buf)?;
@@ -346,13 +363,13 @@ where
     T: Timer,
     NCS: OutputPin,
 {
-    pub fn new(spi: SPI, ncs: NCS, timer: T) -> Result<Self, E> {
+    pub fn new(spi: SPI, ncs: NCS, timer: T) -> Result<Self, Rfm69Error<E>> {
         let mut rfm: Self = new(spi, ncs, timer)?;
         rfm.high_power()?;
         Ok(rfm)
     }
 
-    fn high_power(&mut self) -> Result<(), E> {
+    fn high_power(&mut self) -> Result<(), Rfm69Error<E>> {
         // Turn off over-current protection
         self.modify(Register::OCP, |r| (r & !0xF0) | (0x00))?;
         self.modify(Register::PALEVEL, |r| (r & !0b11100000) | (0b01100000))?;
@@ -366,13 +383,13 @@ where
     T: Timer,
     NCS: OutputPin,
 {
-    pub fn new(spi: SPI, ncs: NCS, timer: T) -> Result<Self, E> {
+    pub fn new(spi: SPI, ncs: NCS, timer: T) -> Result<Self, Rfm69Error<E>> {
         let mut rfm: Self = new(spi, ncs, timer)?;
         rfm.high_power()?;
         Ok(rfm)
     }
 
-    fn high_power(&mut self) -> Result<(), E> {
+    fn high_power(&mut self) -> Result<(), Rfm69Error<E>> {
         // Turn on over-current protection
         self.modify(Register::OCP, |r| (r & !0xF0) | (0x10))?;
         self.modify(Register::PALEVEL, |r| (r & !0b11100000) | (0b10000000))?;
