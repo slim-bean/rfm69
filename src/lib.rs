@@ -57,6 +57,7 @@ pub struct RFM69<SPI, NCS, T, PA> {
     ncs: NCS,
     timer: T,
     rssi: f32,
+    packet_length: PacketLength,
     _pa: PhantomData<PA>,
 }
 
@@ -72,6 +73,7 @@ where
         ncs,
         timer,
         rssi: 0.0,
+        packet_length: PacketLength::Variable,
         _pa: PhantomData,
     };
 
@@ -79,18 +81,28 @@ where
     rfm.mod_settings(ModulationSettings {
         mode: DataMode::Packet,
         ty: ModulationType::FSK,
-        shaping: ModulationShaping::_00,
+        shaping: ModulationShaping::_01,
     })?;
-    rfm.bitrate(10000.0)?; // 10 kbps
-    rfm.fdev(20000.0)?; // 20 kHz
+    rfm.bitrate(250000.0)?; // 10 kbps
+    rfm.fdev(250000.0)?; // 20 kHz
+
+
     rfm.freq(915000000.0)?; // 915 MHz
     rfm.write(Register::LNA, 0x88)?;
-    rfm.write(Register::RXBW, 0x4C)?; // 25 kHz
-    rfm.preamble(3)?;
-    rfm.sync(&[0x41, 0x48])?;
-    rfm.packet_length(PacketLength::Fixed(5))?;
+    rfm.write(Register::RXBW, 0xe0)?; // 25 kHz
+    rfm.write(Register::AFCBW, 0xe0)?;
+    rfm.preamble(4)?;
+    rfm.sync(&[0x2d, 0xd4])?;
+
+    rfm.packet_settings(PacketSettings{
+        crc: true,
+        encoding: DCEncoding::Whitening,
+        filtering: AddressMode::None
+    });
+    rfm.packet_length(PacketLength::Variable)?;
     rfm.modify(Register::PALEVEL, |r| (r & 0xE0) | 31)?;
     rfm.fifo_mode(FifoMode::NotEmpty)?;
+    rfm.aes_off();
 
     Ok(rfm)
 }
@@ -202,12 +214,23 @@ where
         }
     }
 
+    pub fn aes_on(&mut self, key: &[u8; 16]) -> Result<(), E>{
+        self.write_many(Register::AESKEY1, key)?;
+        self.modify(Register::PACKETCONFIG2, |r | r | 0b00000001 );
+        Ok(())
+    }
+
+    pub fn aes_off(&mut self) -> Result<(), E>{
+        self.modify(Register::PACKETCONFIG2, |r | r & 0b11111110 );
+        Ok(())
+    }
+
     pub fn rssi(&mut self) -> f32 {
         self.rssi
     }
 
-    pub fn receive(&mut self, buf: &mut [u8]) -> Result<(), E> {
-        // TODO: Check buf length
+    pub fn receive(&mut self, buf: &mut [u8]) -> Result<(u8), E> {
+
         self.op_mode(OpMode::Reciever)?;
         self.wait_for_mode()?;
 
@@ -215,9 +238,16 @@ where
 
         self.op_mode(OpMode::Standby)?;
 
+        let length: u8;
+
+        match self.packet_length {
+            PacketLength::Fixed(len) => { length = len; },
+            PacketLength::Variable => { length = self.read(Register::FIFO)?; },
+        }
+
         self.read_many(Register::FIFO, buf)?;
         self.rssi = self.read(Register::RSSIVALUE)? as f32 / -2.0;
-        Ok(())
+        Ok(length)
     }
 
     pub fn send(&mut self, buf: &[u8]) -> Result<(), E> {
