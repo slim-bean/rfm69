@@ -265,7 +265,34 @@ where
         Ok(length)
     }
 
+    pub fn receive_async_start(&mut self) -> Result<(), Rfm69Error<E>> {
+        //Enable GPIO0 to interrupt when a payload is ready
+        self.write(Register::DIOMAPPING1, 0b01000000);
+        self.op_mode(OpMode::Reciever)?;
+        self.wait_for_mode()?;
+        Ok(())
+    }
 
+    pub fn receive_async_read(&mut self, buf: &mut [u8]) -> Result<(u8), Rfm69Error<E>> {
+
+        //Not sure if this is really a thing we would need to worry about, but it doesn't hurt to check?
+        if !self.is_packet_ready()? {
+            return Err(Rfm69Error::PacketNotReady);
+        }
+
+        self.op_mode(OpMode::Standby)?;
+
+        let length: u8;
+
+        match self.packet_length {
+            PacketLength::Fixed(len) => { length = len; },
+            PacketLength::Variable => { length = self.read(Register::FIFO)?; },
+        }
+
+        self.read_many(Register::FIFO, buf)?;
+        self.rssi = self.read(Register::RSSIVALUE)? as f32 / -2.0;
+        Ok(length)
+    }
 
     pub fn send(&mut self, buf: &[u8]) -> Result<(), Rfm69Error<E>> {
         // TODO: Check buf length
