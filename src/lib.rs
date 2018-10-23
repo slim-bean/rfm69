@@ -98,8 +98,8 @@ where
         ty: ModulationType::FSK,
         shaping: ModulationShaping::_01,
     })?;
-    rfm.bitrate(250000.0)?; // 10 kbps
-    rfm.fdev(250000.0)?; // 20 kHz
+    rfm.bitrate(125000.0)?; // 125 kbps
+    rfm.fdev(125000.0)?; // 125 kHz
 
 
     rfm.freq(915000000.0)?; // 915 MHz
